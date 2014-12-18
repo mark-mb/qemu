@@ -23,6 +23,7 @@
  */
 #include "hw/hw.h"
 #include "sysemu/sysemu.h"
+#include "sysemu/dma.h"
 #include "hw/isa/isa.h"
 #include "hw/nvram/fw_cfg.h"
 #include "hw/sysbus.h"
@@ -42,6 +43,18 @@
 #define FW_CFG_IO(obj)  OBJECT_CHECK(FWCfgIoState,  (obj), TYPE_FW_CFG_IO)
 #define FW_CFG_MEM(obj) OBJECT_CHECK(FWCfgMemState, (obj), TYPE_FW_CFG_MEM)
 
+/* fw_cfg dma registers */
+#define FW_CFG_DMA_ADDR_LO        0
+#define FW_CFG_DMA_ADDR_HI        4
+#define FW_CFG_DMA_LENGTH         8
+#define FW_CFG_DMA_CONTROL       12
+#define FW_CFG_DMA_SIZE          16
+
+/* FW_CFG_DMA_CONTROL bits */
+#define FW_CFG_DMA_CTL_ERROR   0x01
+#define FW_CFG_DMA_CTL_READ    0x02
+#define FW_CFG_DMA_CTL_MASK    0x03
+
 typedef struct FWCfgEntry {
     uint32_t len;
     uint8_t *data;
@@ -59,6 +72,12 @@ struct FWCfgState {
     uint16_t cur_entry;
     uint32_t cur_offset;
     Notifier machine_ready;
+
+    bool       dma_enabled;
+    AddressSpace *dma_as;
+    dma_addr_t dma_addr;
+    uint32_t   dma_len;
+    uint32_t   dma_ctl;
 };
 
 struct FWCfgIoState {
@@ -75,7 +94,10 @@ struct FWCfgMemState {
     FWCfgState parent_obj;
     /*< public >*/
 
-    MemoryRegion ctl_iomem, data_iomem;
+    MemoryRegion ctl_iomem, data_iomem, dma_iomem;
+#if 0
+    hwaddr ctl_addr, data_addr, dma_addr;
+#endif
     uint32_t data_width;
     MemoryRegionOps wide_data_ops;
 };
@@ -294,6 +316,88 @@ static void fw_cfg_data_mem_write(void *opaque, hwaddr addr,
     } while (i);
 }
 
+static void fw_cfg_dma_transfer(FWCfgState *s)
+{
+    dma_addr_t len;
+    uint8_t *ptr;
+    uint32_t i;
+
+    if (s->dma_ctl & FW_CFG_DMA_CTL_ERROR) {
+        return;
+    }
+    if (!(s->dma_ctl & FW_CFG_DMA_CTL_READ)) {
+        return;
+    }
+
+    while (s->dma_len > 0) {
+        len = s->dma_len;
+        ptr = dma_memory_map(s->dma_as, s->dma_addr, &len,
+                             DMA_DIRECTION_FROM_DEVICE);
+        if (!ptr || !len) {
+            s->dma_ctl |= FW_CFG_DMA_CTL_ERROR;
+            return;
+        }
+
+        for (i = 0; i < len; i++) {
+            ptr[i] = fw_cfg_read(s);
+        }
+
+        s->dma_addr += i;
+        s->dma_len  -= i;
+        dma_memory_unmap(s->dma_as, ptr, len,
+                         DMA_DIRECTION_FROM_DEVICE, i);
+    }
+    s->dma_ctl = 0;
+}
+
+static uint64_t fw_cfg_dma_mem_read(void *opaque, hwaddr addr,
+                                    unsigned size)
+{
+    FWCfgState *s = opaque;
+    uint64_t ret = 0;
+
+    switch (addr) {
+    case FW_CFG_DMA_ADDR_LO:
+        ret = s->dma_addr & 0xffffffff;
+        break;
+    case FW_CFG_DMA_ADDR_HI:
+        ret = (s->dma_addr >> 32) & 0xffffffff;
+        break;
+    case FW_CFG_DMA_LENGTH:
+        ret = s->dma_len;
+        break;
+    case FW_CFG_DMA_CONTROL:
+        ret = s->dma_ctl;
+        break;
+    }
+    return ret;
+}
+
+static void fw_cfg_dma_mem_write(void *opaque, hwaddr addr,
+                                 uint64_t value, unsigned size)
+{
+    FWCfgState *s = opaque;
+
+    switch (addr) {
+    case FW_CFG_DMA_ADDR_LO:
+        s->dma_addr &= ~((dma_addr_t)0xffffffff);
+        s->dma_addr |= value;
+        break;
+    case FW_CFG_DMA_ADDR_HI:
+        s->dma_addr &= ~(((dma_addr_t)0xffffffff) << 32);
+        s->dma_addr |= ((dma_addr_t)value) << 32;
+        break;
+    case FW_CFG_DMA_LENGTH:
+        s->dma_len = value;
+        break;
+    case FW_CFG_DMA_CONTROL:
+        value &= FW_CFG_DMA_CTL_MASK;
+        s->dma_ctl = value;
+        fw_cfg_dma_transfer(s);
+        break;
+    }
+}
+
 static bool fw_cfg_data_mem_valid(void *opaque, hwaddr addr,
                                   unsigned size, bool is_write)
 {
@@ -361,6 +465,16 @@ static const MemoryRegionOps fw_cfg_comb_mem_ops = {
     .valid.accepts = fw_cfg_comb_valid,
 };
 
+static const MemoryRegionOps fw_cfg_dma_mem_ops = {
+    .read = fw_cfg_dma_mem_read,
+    .write = fw_cfg_dma_mem_write,
+    .endianness = DEVICE_BIG_ENDIAN,
+    .valid = {
+        .min_access_size = 4,
+        .max_access_size = 4,
+    },
+};
+
 static void fw_cfg_reset(DeviceState *d)
 {
     FWCfgState *s = FW_CFG(d);
@@ -401,6 +515,23 @@ static bool is_version_1(void *opaque, int version_id)
     return version_id == 1;
 }
 
+static VMStateDescription vmstate_fw_cfg_dma = {
+    .name = "fw_cfg/dma",
+    .fields = (VMStateField[]) {
+        VMSTATE_UINT64(dma_addr, FWCfgState),
+        VMSTATE_UINT32(dma_len, FWCfgState),
+        VMSTATE_UINT32(dma_ctl, FWCfgState),
+        VMSTATE_END_OF_LIST()
+    },
+};
+
+static bool fw_cfg_dma_enabled(void *opaque)
+{
+    FWCfgState *s = opaque;
+
+    return s->dma_enabled;
+}
+
 static const VMStateDescription vmstate_fw_cfg = {
     .name = "fw_cfg",
     .version_id = 2,
@@ -410,6 +541,14 @@ static const VMStateDescription vmstate_fw_cfg = {
         VMSTATE_UINT16_HACK(cur_offset, FWCfgState, is_version_1),
         VMSTATE_UINT32_V(cur_offset, FWCfgState, 2),
         VMSTATE_END_OF_LIST()
+    },
+    .subsections = (VMStateSubsection[]) {
+        {
+            .vmsd   = &vmstate_fw_cfg_dma,
+            .needed = fw_cfg_dma_enabled,
+        }, {
+            /* end of list */
+        }
     }
 };
 
@@ -618,8 +757,9 @@ FWCfgState *fw_cfg_init_io(uint32_t iobase)
     return FW_CFG(dev);
 }
 
-FWCfgState *fw_cfg_init_mem_wide(hwaddr ctl_addr, hwaddr data_addr,
-                                 uint32_t data_width)
+FWCfgState *fw_cfg_init_mem_wide(hwaddr ctl_addr,
+                                 hwaddr data_addr, uint32_t data_width,
+                                 hwaddr dma_addr, AddressSpace *dma_as)
 {
     DeviceState *dev;
     SysBusDevice *sbd;
@@ -633,13 +773,20 @@ FWCfgState *fw_cfg_init_mem_wide(hwaddr ctl_addr, hwaddr data_addr,
     sysbus_mmio_map(sbd, 0, ctl_addr);
     sysbus_mmio_map(sbd, 1, data_addr);
 
+    if (dma_addr && dma_as) {
+        FW_CFG(dev)->dma_as = dma_as;
+        FW_CFG(dev)->dma_enabled = true;
+        sysbus_mmio_map(sbd, 1, dma_addr);
+    }
+
     return FW_CFG(dev);
 }
 
 FWCfgState *fw_cfg_init_mem(hwaddr ctl_addr, hwaddr data_addr)
 {
     return fw_cfg_init_mem_wide(ctl_addr, data_addr,
-                                fw_cfg_data_mem_ops.valid.max_access_size);
+                                fw_cfg_data_mem_ops.valid.max_access_size,
+                                0, NULL);
 }
 
 
@@ -725,6 +872,10 @@ static void fw_cfg_mem_realize(DeviceState *dev, Error **errp)
     memory_region_init_io(&s->data_iomem, OBJECT(s), data_ops, FW_CFG(s),
                           "fwcfg.data", data_ops->valid.max_access_size);
     sysbus_init_mmio(sbd, &s->data_iomem);
+
+    memory_region_init_io(&s->dma_iomem, OBJECT(s), &fw_cfg_dma_mem_ops,
+                          FW_CFG(s), "fwcfg.dma", FW_CFG_DMA_SIZE);
+    sysbus_init_mmio(sbd, &s->dma_iomem);
 }
 
 static void fw_cfg_mem_class_init(ObjectClass *klass, void *data)

@@ -132,6 +132,41 @@ Selector Reg.    Range Usage
 In practice, the number of allowed firmware configuration items is given
 by the value of FW_CFG_MAX_ENTRY (see fw_cfg.h).
 
+= Guest-side DMA Interface =
+
+== Registers ==
+
+This does not replace the existing fw_cfg interface, it is an add-on.
+Specifically there is no select register in the dma interface, guests
+must use the select register of the classic fw_cfg interface instead.
+
+There are four 32bit registers: Target address (low and high bits),
+transfer length, control register.
+
+== Protocol ==
+
+Probing for dma support being available: Write target address, read it
+back, verify you got back the value you wrote.
+
+Kick a transfer: Write select, target address and transfer length
+registers (order doesn't matter).  Then flip read bit in the control
+register to '1'.  Also make sure the error bit is cleared.
+
+Check result:  Read control register:
+   error bit set     ->  something went wrong.
+   all bits cleared  ->  transfer finished successfully.
+   otherwise         ->  transfer still in progress (doesn't happen
+                         today due to implementation not being async,
+                         but may in the future).
+
+Target address goes up and transfer length goes down as the transfer
+happens, so after a successful transfer the length register is zero
+and the address register points right after the memory block written.
+
+If a partial transfer happened before an error occured the address and
+length registers indicate how much data has been transfered
+successfully.
+
 = Host-side API =
 
 The following functions are available to the QEMU programmer for adding
