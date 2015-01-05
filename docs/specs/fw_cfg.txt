@@ -167,6 +167,12 @@ If a partial transfer happened before an error occured the address and
 length registers indicate how much data has been transfered
 successfully.
 
+== Register Locations ==
+
+=== arm ===
+
+classic fw_cfg base + 16
+
 = Host-side API =
 
 The following functions are available to the QEMU programmer for adding

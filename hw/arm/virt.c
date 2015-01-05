@@ -606,13 +606,13 @@ static void create_flash(const VirtBoardInfo *vbi)
     g_free(nodename);
 }
 
-static void create_fw_cfg(const VirtBoardInfo *vbi)
+static void create_fw_cfg(AddressSpace *as, const VirtBoardInfo *vbi)
 {
     hwaddr base = vbi->memmap[VIRT_FW_CFG].base;
     hwaddr size = vbi->memmap[VIRT_FW_CFG].size;
     char *nodename;
 
-    fw_cfg_init_mem_wide(base + 8, base, 8, 0, NULL);
+    fw_cfg_init_mem_wide(base + 8, base, 8, 16, as);
 
     nodename = g_strdup_printf("/fw-cfg@%" PRIx64, base);
     qemu_fdt_add_subnode(vbi->fdt, nodename);
@@ -800,6 +800,7 @@ static void machvirt_init(MachineState *machine)
     VirtGuestInfoState *guest_info_state = g_malloc0(sizeof *guest_info_state);
     VirtGuestInfo *guest_info = &guest_info_state->info;
     char **cpustr;
+    AddressSpace *as = NULL;
 
     if (!cpu_model) {
         cpu_model = "cortex-a15";
@@ -836,6 +837,10 @@ static void machvirt_init(MachineState *machine)
             exit(1);
         }
         cpuobj = object_new(object_class_get_name(oc));
+
+        if (!as) {
+            as = CPU(cpuobj)->as;
+        }
 
         /* Handle any CPU options specified by the user */
         cc->parse_features(CPU(cpuobj), cpuopts, &err);
@@ -889,7 +894,7 @@ static void machvirt_init(MachineState *machine)
      */
     create_virtio_devices(vbi, pic);
 
-    create_fw_cfg(vbi);
+    create_fw_cfg(as, vbi);
     rom_set_fw(fw_cfg_find());
 
     guest_info->smp_cpus = smp_cpus;
