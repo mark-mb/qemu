@@ -515,8 +515,16 @@ static bool is_version_1(void *opaque, int version_id)
     return version_id == 1;
 }
 
+static bool fw_cfg_dma_enabled(void *opaque)
+{
+    FWCfgState *s = opaque;
+
+    return s->dma_enabled;
+}
+
 static VMStateDescription vmstate_fw_cfg_dma = {
     .name = "fw_cfg/dma",
+    .needed = fw_cfg_dma_enabled,
     .fields = (VMStateField[]) {
         VMSTATE_UINT64(dma_addr, FWCfgState),
         VMSTATE_UINT32(dma_len, FWCfgState),
@@ -524,13 +532,6 @@ static VMStateDescription vmstate_fw_cfg_dma = {
         VMSTATE_END_OF_LIST()
     },
 };
-
-static bool fw_cfg_dma_enabled(void *opaque)
-{
-    FWCfgState *s = opaque;
-
-    return s->dma_enabled;
-}
 
 static const VMStateDescription vmstate_fw_cfg = {
     .name = "fw_cfg",
@@ -542,13 +543,9 @@ static const VMStateDescription vmstate_fw_cfg = {
         VMSTATE_UINT32_V(cur_offset, FWCfgState, 2),
         VMSTATE_END_OF_LIST()
     },
-    .subsections = (VMStateSubsection[]) {
-        {
-            .vmsd   = &vmstate_fw_cfg_dma,
-            .needed = fw_cfg_dma_enabled,
-        }, {
-            /* end of list */
-        }
+    .subsections = (const VMStateDescription*[]) {
+        &vmstate_fw_cfg_dma,
+        NULL,
     }
 };
 
