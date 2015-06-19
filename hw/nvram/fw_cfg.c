@@ -639,7 +639,7 @@ void fw_cfg_add_file_callback(FWCfgState *s,  const char *filename,
                               FWCfgReadCallback callback, void *callback_opaque,
                               void *data, size_t len)
 {
-    int i, index;
+    int i, index, count;
     size_t dsize;
 
     if (!s->files) {
@@ -648,13 +648,31 @@ void fw_cfg_add_file_callback(FWCfgState *s,  const char *filename,
         fw_cfg_add_bytes(s, FW_CFG_FILE_DIR, s->files, dsize);
     }
 
-    index = be32_to_cpu(s->files->count);
-    assert(index < FW_CFG_FILE_SLOTS);
+    count = be32_to_cpu(s->files->count);
+    assert(count < FW_CFG_FILE_SLOTS);
+
+    index = count;
+    if (1 /* sort entries */) {
+        while (index > 0 && strcmp(filename, s->files->f[index-1].name) < 0) {
+            s->files->f[index] =
+                s->files->f[index - 1];
+            s->files->f[index].select =
+                cpu_to_be16(FW_CFG_FILE_FIRST + index);
+            s->entries[0][FW_CFG_FILE_FIRST + index] =
+                s->entries[0][FW_CFG_FILE_FIRST + index - 1];
+            index--;
+        }
+        memset(&s->files->f[index],
+               0, sizeof(FWCfgFile));
+        memset(&s->entries[0][FW_CFG_FILE_FIRST + index],
+               0, sizeof(FWCfgEntry));
+    }
 
     pstrcpy(s->files->f[index].name, sizeof(s->files->f[index].name),
             filename);
-    for (i = 0; i < index; i++) {
-        if (strcmp(s->files->f[index].name, s->files->f[i].name) == 0) {
+    for (i = 0; i <= count; i++) {
+        if (i != index &&
+            strcmp(s->files->f[index].name, s->files->f[i].name) == 0) {
             error_report("duplicate fw_cfg file name: %s",
                          s->files->f[index].name);
             exit(1);
@@ -668,7 +686,7 @@ void fw_cfg_add_file_callback(FWCfgState *s,  const char *filename,
     s->files->f[index].select = cpu_to_be16(FW_CFG_FILE_FIRST + index);
     trace_fw_cfg_add_file(s, index, s->files->f[index].name, len);
 
-    s->files->count = cpu_to_be32(index+1);
+    s->files->count = cpu_to_be32(count+1);
 }
 
 void fw_cfg_add_file(FWCfgState *s,  const char *filename,
