@@ -47,8 +47,9 @@
 #define FW_CFG_DMA_ADDR_LO        0
 #define FW_CFG_DMA_ADDR_HI        4
 #define FW_CFG_DMA_LENGTH         8
-#define FW_CFG_DMA_CONTROL       12
-#define FW_CFG_DMA_SIZE          16
+#define FW_CFG_DMA_OFFSET        12
+#define FW_CFG_DMA_CONTROL       16
+#define FW_CFG_DMA_SIZE          20
 
 /* FW_CFG_DMA_CONTROL bits */
 #define FW_CFG_DMA_CTL_ERROR   0x01
@@ -78,6 +79,7 @@ struct FWCfgState {
     dma_addr_t dma_addr;
     uint32_t   dma_len;
     uint32_t   dma_ctl;
+    uint32_t   dma_off;
 };
 
 struct FWCfgIoState {
@@ -338,6 +340,10 @@ static void fw_cfg_dma_transfer(FWCfgState *s)
             return;
         }
 
+        for (i = 0; i < s->dma_off; ++i) {
+            fw_cfg_read(s);
+        }
+
         for (i = 0; i < len; i++) {
             ptr[i] = fw_cfg_read(s);
         }
@@ -366,6 +372,9 @@ static uint64_t fw_cfg_dma_mem_read(void *opaque, hwaddr addr,
     case FW_CFG_DMA_LENGTH:
         ret = s->dma_len;
         break;
+    case FW_CFG_DMA_OFFSET:
+        ret = s->dma_off;
+        break;
     case FW_CFG_DMA_CONTROL:
         ret = s->dma_ctl;
         break;
@@ -389,6 +398,9 @@ static void fw_cfg_dma_mem_write(void *opaque, hwaddr addr,
         break;
     case FW_CFG_DMA_LENGTH:
         s->dma_len = value;
+        break;
+    case FW_CFG_DMA_OFFSET:
+        s->dma_off = value;
         break;
     case FW_CFG_DMA_CONTROL:
         value &= FW_CFG_DMA_CTL_MASK;
@@ -528,6 +540,7 @@ static VMStateDescription vmstate_fw_cfg_dma = {
     .fields = (VMStateField[]) {
         VMSTATE_UINT64(dma_addr, FWCfgState),
         VMSTATE_UINT32(dma_len, FWCfgState),
+        VMSTATE_UINT32(dma_off, FWCfgState),
         VMSTATE_UINT32(dma_ctl, FWCfgState),
         VMSTATE_END_OF_LIST()
     },
@@ -791,7 +804,7 @@ FWCfgState *fw_cfg_init_mem_wide(hwaddr ctl_addr,
     if (dma_addr && dma_as) {
         FW_CFG(dev)->dma_as = dma_as;
         FW_CFG(dev)->dma_enabled = true;
-        sysbus_mmio_map(sbd, 1, dma_addr);
+        sysbus_mmio_map(sbd, 2, dma_addr);
     }
 
     return FW_CFG(dev);
