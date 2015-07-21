@@ -74,6 +74,7 @@ static bool smbios_uuid_encoded = true;
 static bool gigabyte_align = true;
 static bool has_reserved_memory = true;
 static bool kvmclock_enabled = true;
+static bool fw_cfg_dma = true;
 
 /* PC hardware initialisation */
 static void pc_init1(MachineState *machine)
@@ -168,6 +169,7 @@ static void pc_init1(MachineState *machine)
     guest_info->isapc_ram_fw = !pci_enabled;
     guest_info->has_reserved_memory = has_reserved_memory;
     guest_info->rsdp_in_ram = rsdp_in_ram;
+    guest_info->fw_cfg_dma = fw_cfg_dma;
 
     if (smbios_defaults) {
         MachineClass *mc = MACHINE_GET_CLASS(machine);
@@ -304,9 +306,16 @@ static void pc_init1(MachineState *machine)
     }
 }
 
+static void pc_compat_2_4(MachineState *machine)
+{
+    fw_cfg_dma = false;
+}
+
 static void pc_compat_2_3(MachineState *machine)
 {
     PCMachineState *pcms = PC_MACHINE(machine);
+
+    pc_compat_2_4(machine);
     savevm_skip_section_footers();
     if (kvm_enabled()) {
         pcms->smm = ON_OFF_AUTO_OFF;
@@ -477,7 +486,7 @@ static void pc_i440fx_machine_options(MachineClass *m)
     m->hot_add_cpu = pc_hot_add_cpu;
 }
 
-static void pc_i440fx_2_4_machine_options(MachineClass *m)
+static void pc_i440fx_2_5_machine_options(MachineClass *m)
 {
     pc_i440fx_machine_options(m);
     m->default_machine_opts = "firmware=bios-256k.bin";
@@ -486,7 +495,19 @@ static void pc_i440fx_2_4_machine_options(MachineClass *m)
     m->is_default = 1;
 }
 
-DEFINE_I440FX_MACHINE(v2_4, "pc-i440fx-2.4", NULL,
+DEFINE_I440FX_MACHINE(v2_5, "pc-i440fx-2.5", NULL,
+                      pc_i440fx_2_5_machine_options)
+
+static void pc_i440fx_2_4_machine_options(MachineClass *m)
+{
+    pc_i440fx_machine_options(m);
+    m->default_machine_opts = "firmware=bios-256k.bin";
+    m->default_display = "std";
+    m->alias = NULL;
+    m->is_default = 0;
+}
+
+DEFINE_I440FX_MACHINE(v2_4, "pc-i440fx-2.4", pc_compat_2_4,
                       pc_i440fx_2_4_machine_options)
 
 

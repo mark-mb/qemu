@@ -103,6 +103,7 @@ struct PcGuestInfo {
     bool has_acpi_build;
     bool has_reserved_memory;
     bool rsdp_in_ram;
+    bool fw_cfg_dma;
 };
 
 /* parallel.c */

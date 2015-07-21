@@ -61,6 +61,7 @@ static bool smbios_uuid_encoded = true;
  */
 static bool gigabyte_align = true;
 static bool has_reserved_memory = true;
+static bool fw_cfg_dma = true;
 
 /* PC hardware initialisation */
 static void pc_q35_init(MachineState *machine)
@@ -156,6 +157,7 @@ static void pc_q35_init(MachineState *machine)
     guest_info->has_acpi_build = has_acpi_build;
     guest_info->has_reserved_memory = has_reserved_memory;
     guest_info->rsdp_in_ram = rsdp_in_ram;
+    guest_info->fw_cfg_dma = fw_cfg_dma;
 
     /* Migration was not supported in 2.0 for Q35, so do not bother
      * with this hack (see hw/i386/acpi-build.c).
@@ -287,9 +289,16 @@ static void pc_q35_init(MachineState *machine)
     }
 }
 
+static void pc_compat_2_4(MachineState *machine)
+{
+    fw_cfg_dma = false;
+}
+
 static void pc_compat_2_3(MachineState *machine)
 {
     PCMachineState *pcms = PC_MACHINE(machine);
+
+    pc_compat_2_4(machine);
     savevm_skip_section_footers();
     if (kvm_enabled()) {
         pcms->smm = ON_OFF_AUTO_OFF;
@@ -392,7 +401,7 @@ static void pc_q35_machine_options(MachineClass *m)
     m->units_per_default_bus = 1;
 }
 
-static void pc_q35_2_4_machine_options(MachineClass *m)
+static void pc_q35_2_5_machine_options(MachineClass *m)
 {
     pc_q35_machine_options(m);
     m->default_machine_opts = "firmware=bios-256k.bin";
@@ -402,7 +411,20 @@ static void pc_q35_2_4_machine_options(MachineClass *m)
     m->alias = "q35";
 }
 
-DEFINE_Q35_MACHINE(v2_4, "pc-q35-2.4", NULL,
+DEFINE_Q35_MACHINE(v2_5, "pc-q35-2.5", NULL,
+                   pc_q35_2_5_machine_options);
+
+static void pc_q35_2_4_machine_options(MachineClass *m)
+{
+    pc_q35_machine_options(m);
+    m->default_machine_opts = "firmware=bios-256k.bin";
+    m->default_display = "std";
+    m->no_floppy = 1;
+    m->no_tco = 0;
+    m->alias = NULL;
+}
+
+DEFINE_Q35_MACHINE(v2_4, "pc-q35-2.4", pc_compat_2_4,
                    pc_q35_2_4_machine_options);
 
 

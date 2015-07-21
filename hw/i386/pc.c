@@ -87,6 +87,7 @@ void pc_set_legacy_acpi_data_size(void)
 }
 
 #define BIOS_CFG_IOPORT 0x510
+#define BIOS_CFG_DMA_ADDR 0xfef00000
 #define FW_CFG_ACPI_TABLES (FW_CFG_ARCH_LOCAL + 0)
 #define FW_CFG_SMBIOS_ENTRIES (FW_CFG_ARCH_LOCAL + 1)
 #define FW_CFG_IRQ0_OVERRIDE (FW_CFG_ARCH_LOCAL + 2)
@@ -718,7 +719,7 @@ static unsigned int pc_apic_id_limit(unsigned int max_cpus)
     return x86_cpu_apic_id_from_index(max_cpus - 1) + 1;
 }
 
-static FWCfgState *bochs_bios_init(void)
+static FWCfgState *bochs_bios_init(AddressSpace *as, hwaddr fw_cfg_addr)
 {
     FWCfgState *fw_cfg;
     uint8_t *smbios_tables, *smbios_anchor;
@@ -727,7 +728,13 @@ static FWCfgState *bochs_bios_init(void)
     int i, j;
     unsigned int apic_id_limit = pc_apic_id_limit(max_cpus);
 
-    fw_cfg = fw_cfg_init_io(BIOS_CFG_IOPORT);
+    if (as && fw_cfg_addr) {
+        fw_cfg = fw_cfg_init_mem_wide(fw_cfg_addr + 8, fw_cfg_addr, 8,
+                                                    fw_cfg_addr + 10, as);
+    } else {
+        fw_cfg = fw_cfg_init_io(BIOS_CFG_IOPORT);
+    }
+
     /* FW_CFG_MAX_CPUS is a bit confusing/problematic on x86:
      *
      * SeaBIOS needs FW_CFG_MAX_CPUS for CPU hotplug, but the CPU hotplug
@@ -1302,6 +1309,7 @@ FWCfgState *pc_memory_init(MachineState *machine,
     MemoryRegion *ram_below_4g, *ram_above_4g;
     FWCfgState *fw_cfg;
     PCMachineState *pcms = PC_MACHINE(machine);
+    AddressSpace *as;
 
     assert(machine->ram_size == below_4g_mem_size + above_4g_mem_size);
 
@@ -1391,7 +1399,14 @@ FWCfgState *pc_memory_init(MachineState *machine,
                                         option_rom_mr,
                                         1);
 
-    fw_cfg = bochs_bios_init();
+    if (guest_info->fw_cfg_dma) {
+        as = g_malloc(sizeof(*as));
+        address_space_init(as, ram_below_4g, "pc.as");
+        fw_cfg = bochs_bios_init(as, BIOS_CFG_DMA_ADDR);
+    } else {
+        fw_cfg = bochs_bios_init(NULL, 0);
+    }
+
     rom_set_fw(fw_cfg);
 
     if (guest_info->has_reserved_memory && pcms->hotplug_memory.base) {
