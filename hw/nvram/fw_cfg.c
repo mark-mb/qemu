@@ -47,9 +47,8 @@
 #define FW_CFG_DMA_ADDR_LO        0
 #define FW_CFG_DMA_ADDR_HI        4
 #define FW_CFG_DMA_LENGTH         8
-#define FW_CFG_DMA_OFFSET        12
-#define FW_CFG_DMA_CONTROL       16
-#define FW_CFG_DMA_SIZE          20
+#define FW_CFG_DMA_CONTROL       12
+#define FW_CFG_DMA_SIZE          16
 
 /* FW_CFG_DMA_CONTROL bits */
 #define FW_CFG_DMA_CTL_ERROR   0x01
@@ -79,7 +78,6 @@ struct FWCfgState {
     dma_addr_t dma_addr;
     uint32_t   dma_len;
     uint32_t   dma_ctl;
-    uint32_t   dma_off;
 };
 
 struct FWCfgIoState {
@@ -97,9 +95,6 @@ struct FWCfgMemState {
     /*< public >*/
 
     MemoryRegion ctl_iomem, data_iomem, dma_iomem;
-#if 0
-    hwaddr ctl_addr, data_addr, dma_addr;
-#endif
     uint32_t data_width;
     MemoryRegionOps wide_data_ops;
 };
@@ -322,38 +317,75 @@ static void fw_cfg_dma_transfer(FWCfgState *s)
 {
     dma_addr_t len;
     uint8_t *ptr;
-    uint32_t i;
+    uint32_t cnt;
+    int arch = !!(s->cur_entry & FW_CFG_ARCH_LOCAL);
+    FWCfgEntry *e = &s->entries[arch][s->cur_entry & FW_CFG_ENTRY_MASK];
 
     if (s->dma_ctl & FW_CFG_DMA_CTL_ERROR) {
         return;
     }
+
     if (!(s->dma_ctl & FW_CFG_DMA_CTL_READ)) {
         return;
     }
 
-    while (s->dma_len > 0) {
-        len = s->dma_len;
-        ptr = dma_memory_map(s->dma_as, s->dma_addr, &len,
-                             DMA_DIRECTION_FROM_DEVICE);
-        if (!ptr || !len) {
-            s->dma_ctl |= FW_CFG_DMA_CTL_ERROR;
-            return;
+    if (s->cur_entry == FW_CFG_INVALID || !e->data || s->cur_offset >= e->len) {
+        while (s->dma_len > 0) {
+            len = s->dma_len;
+            if (s->dma_addr) {
+                ptr = dma_memory_map(s->dma_as, s->dma_addr, &len,
+                                     DMA_DIRECTION_FROM_DEVICE);
+                if (!ptr || !len) {
+                    s->dma_ctl |= FW_CFG_DMA_CTL_ERROR;
+                    return;
+                }
+
+                memset(ptr, 0, len);
+
+                dma_memory_unmap(s->dma_as, ptr, len,
+                                 DMA_DIRECTION_FROM_DEVICE, len);
+            }
+
+            s->dma_addr += len;
+            s->dma_len  -= len;
+        }
+    } else {
+        while (s->dma_len > 0) {
+            len = s->dma_len;
+
+            if (e->read_callback) {
+                for (cnt = 0; cnt < len; cnt++) {
+                     e->read_callback(e->callback_opaque, s->cur_offset + cnt);
+                }
+            }
+
+            if (s->dma_addr) {
+                ptr = dma_memory_map(s->dma_as, s->dma_addr, &len,
+                                     DMA_DIRECTION_FROM_DEVICE);
+                if (!ptr || !len) {
+                    s->dma_ctl |= FW_CFG_DMA_CTL_ERROR;
+                    return;
+                }
+
+
+                memcpy(ptr, &e->data[s->cur_offset], len);
+
+                dma_memory_unmap(s->dma_as, ptr, len,
+                                 DMA_DIRECTION_FROM_DEVICE, len);
+            }
+
+            s->cur_offset += len;
+
+            s->dma_addr += len;
+            s->dma_len  -= len;
         }
 
-        for (i = 0; i < s->dma_off; ++i) {
-            fw_cfg_read(s);
-        }
-
-        for (i = 0; i < len; i++) {
-            ptr[i] = fw_cfg_read(s);
-        }
-
-        s->dma_addr += i;
-        s->dma_len  -= i;
-        dma_memory_unmap(s->dma_as, ptr, len,
-                         DMA_DIRECTION_FROM_DEVICE, i);
+        s->dma_ctl = 0;
     }
-    s->dma_ctl = 0;
+
+    trace_fw_cfg_read(s, 0);
+    return;
+
 }
 
 static uint64_t fw_cfg_dma_mem_read(void *opaque, hwaddr addr,
@@ -371,9 +403,6 @@ static uint64_t fw_cfg_dma_mem_read(void *opaque, hwaddr addr,
         break;
     case FW_CFG_DMA_LENGTH:
         ret = s->dma_len;
-        break;
-    case FW_CFG_DMA_OFFSET:
-        ret = s->dma_off;
         break;
     case FW_CFG_DMA_CONTROL:
         ret = s->dma_ctl;
@@ -398,9 +427,6 @@ static void fw_cfg_dma_mem_write(void *opaque, hwaddr addr,
         break;
     case FW_CFG_DMA_LENGTH:
         s->dma_len = value;
-        break;
-    case FW_CFG_DMA_OFFSET:
-        s->dma_off = value;
         break;
     case FW_CFG_DMA_CONTROL:
         value &= FW_CFG_DMA_CTL_MASK;
@@ -540,7 +566,6 @@ static VMStateDescription vmstate_fw_cfg_dma = {
     .fields = (VMStateField[]) {
         VMSTATE_UINT64(dma_addr, FWCfgState),
         VMSTATE_UINT32(dma_len, FWCfgState),
-        VMSTATE_UINT32(dma_off, FWCfgState),
         VMSTATE_UINT32(dma_ctl, FWCfgState),
         VMSTATE_END_OF_LIST()
     },
