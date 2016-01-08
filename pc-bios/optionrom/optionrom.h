@@ -29,7 +29,8 @@
 #define DEBUG_HERE \
 	jmp		1f;				\
 	1:
-	
+
+#ifndef C_CODE
 /*
  * Read a variable from the fw_cfg device.
  * Clobbers:	%edx
@@ -49,6 +50,7 @@
 	inb		(%dx), %al
 	bswap		%eax
 .endm
+#endif
 
 #define read_fw_blob_pre(var)				\
 	read_fw		var ## _SIZE;			\
